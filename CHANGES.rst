@@ -1,5 +1,15 @@
 .. currentmodule:: jinja2
 
+Version 3.1.7
+-------------
+
+Unreleased
+
+-   ``meta.find_undeclared_variables`` does not report a variable that is set
+    in all branches of ``{% if %}{% elif %}{% else %}`` blocks before it is
+    used. :issue:`2069`
+
+
 Version 3.1.6
 -------------
 
