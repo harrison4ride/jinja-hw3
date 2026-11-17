@@ -258,6 +258,81 @@ def test_if_branching_stores_undefined():
     }
 
 
+def test_if_branching_stores_all_branches():
+    def assign(value):
+        return nodes.Assign(nodes.Name("variable", "store"), nodes.Const(value))
+
+    tmpl = nodes.Template(
+        [
+            nodes.If(
+                nodes.Name("a", "load"),
+                [assign(1)],
+                [nodes.If(nodes.Name("b", "load"), [assign(2)], [], [])],
+                [assign(3)],
+            )
+        ]
+    )
+
+    sym = symbols_for_node(tmpl)
+    assert sym.stores == {"variable"}
+    assert sym.loads == {
+        "l_0_variable": ("undefined", None),
+        "l_0_a": ("resolve", "a"),
+        "l_0_b": ("resolve", "b"),
+    }
+
+
+def test_if_branching_stores_not_in_elif():
+    def assign(value):
+        return nodes.Assign(nodes.Name("variable", "store"), nodes.Const(value))
+
+    tmpl = nodes.Template(
+        [
+            nodes.If(
+                nodes.Name("a", "load"),
+                [assign(1)],
+                [
+                    nodes.If(nodes.Name("b", "load"), [assign(2)], [], []),
+                    nodes.If(nodes.Name("c", "load"), [], [], []),
+                ],
+                [assign(3)],
+            )
+        ]
+    )
+
+    sym = symbols_for_node(tmpl)
+    assert sym.stores == {"variable"}
+    assert sym.loads == {
+        "l_0_variable": ("resolve", "variable"),
+        "l_0_a": ("resolve", "a"),
+        "l_0_b": ("resolve", "b"),
+        "l_0_c": ("resolve", "c"),
+    }
+
+
+def test_if_branching_stores_after_nested_load():
+    def assign(value):
+        return nodes.Assign(nodes.Name("variable", "store"), nodes.Const(value))
+
+    for_loop = nodes.For(
+        nodes.Name("item", "store"),
+        nodes.Name("seq", "load"),
+        [nodes.Output([nodes.Name("variable", "load")])],
+        [],
+        None,
+        False,
+    )
+    if_ = nodes.If(nodes.Name("a", "load"), [assign(1)], [], [assign(2)])
+
+    # The loop runs first and has to see the value from the context.
+    sym = symbols_for_node(nodes.Template([for_loop, if_]))
+    assert sym.loads["l_0_variable"] == ("resolve", "variable")
+
+    # The loop runs after the name is set in all branches.
+    sym = symbols_for_node(nodes.Template([if_, for_loop]))
+    assert sym.loads["l_0_variable"] == ("undefined", None)
+
+
 def test_if_branching_multi_scope():
     for_loop = nodes.For(
         nodes.Name("item", "store"),

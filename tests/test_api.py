@@ -205,6 +205,167 @@ class TestMeta:
         x = meta.find_undeclared_variables(ast)
         assert x == {"bar"}
 
+    @pytest.mark.parametrize(
+        ("source", "expect"),
+        [
+            # more than one elif
+            (
+                "{% if a %}{% set x = 1 %}{% elif b %}{% set x = 2 %}"
+                "{% elif c %}{% set x = 3 %}{% else %}{% set x = 4 %}{% endif %}"
+                "{{ x }}",
+                {"a", "b", "c"},
+            ),
+            # nested in the if branch
+            (
+                "{% if a %}{% if b %}{% set x = 1 %}{% else %}{% set x = 2 %}"
+                "{% endif %}{% else %}{% set x = 3 %}{% endif %}{{ x }}",
+                {"a", "b"},
+            ),
+            # nested in the else branch, with an elif
+            (
+                "{% if a %}{% set x = 1 %}{% else %}{% if b %}{% set x = 2 %}"
+                "{% elif c %}{% set x = 3 %}{% else %}{% set x = 4 %}{% endif %}"
+                "{% endif %}{{ x }}",
+                {"a", "b", "c"},
+            ),
+            # only one of two names is set in every branch
+            (
+                "{% if a %}{% set x = 1 %}{% set y = 1 %}{% else %}{% set x = 2 %}"
+                "{% endif %}{{ x }}{{ y }}",
+                {"a", "y"},
+            ),
+            # tuple and block assignments
+            (
+                "{% if a %}{% set x, y = 1, 2 %}{% else %}{% set x %}3{% endset %}"
+                "{% set y = 4 %}{% endif %}{{ x }}{{ y }}",
+                {"a"},
+            ),
+            # a macro defined in every branch
+            (
+                "{% if a %}{% macro m() %}1{% endmacro %}{% else %}"
+                "{% macro m() %}2{% endmacro %}{% endif %}{{ m() }}",
+                {"a"},
+            ),
+            # inside a for loop
+            (
+                "{% for i in seq %}{% if a %}{% set x = 1 %}{% else %}"
+                "{% set x = 2 %}{% endif %}{{ x }}{% endfor %}",
+                {"seq", "a"},
+            ),
+            # inside a macro
+            (
+                "{% macro m() %}{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}"
+                "{% endif %}{{ x }}{% endmacro %}",
+                {"a"},
+            ),
+            # read by a for loop after the if statement
+            (
+                "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}"
+                "{% for i in seq %}{{ x }}{% endfor %}",
+                {"a", "seq"},
+            ),
+        ],
+    )
+    def test_find_undeclared_variables_set_in_every_branch(self, env, source, expect):
+        ast = env.parse(source)
+        assert meta.find_undeclared_variables(ast) == expect
+
+    @pytest.mark.parametrize(
+        ("source", "expect"),
+        [
+            # no else
+            ("{% if a %}{% set x = 1 %}{% endif %}{{ x }}", {"a", "x"}),
+            # elif, but no else
+            (
+                "{% if a %}{% set x = 1 %}{% elif b %}{% set x = 2 %}{% endif %}"
+                "{{ x }}",
+                {"a", "b", "x"},
+            ),
+            # the else branch does not set
+            (
+                "{% if a %}{% set x = 1 %}{% else %}{{ y }}{% endif %}{{ x }}",
+                {"a", "x", "y"},
+            ),
+            # the if branch does not set
+            (
+                "{% if a %}{{ y }}{% else %}{% set x = 2 %}{% endif %}{{ x }}",
+                {"a", "x", "y"},
+            ),
+            # the only elif does not set
+            (
+                "{% if a %}{% set x = 1 %}{% elif b %}{{ y }}{% else %}"
+                "{% set x = 3 %}{% endif %}{{ x }}",
+                {"a", "b", "x", "y"},
+            ),
+            # one of two elifs does not set
+            (
+                "{% if a %}{% set x = 1 %}{% elif b %}{% set x = 2 %}{% elif c %}"
+                "{% else %}{% set x = 4 %}{% endif %}{{ x }}",
+                {"a", "b", "c", "x"},
+            ),
+            # a nested if without else
+            (
+                "{% if a %}{% if b %}{% set x = 1 %}{% endif %}{% else %}"
+                "{% set x = 3 %}{% endif %}{{ x }}",
+                {"a", "b", "x"},
+            ),
+        ],
+    )
+    def test_find_undeclared_variables_set_in_some_branches(self, env, source, expect):
+        ast = env.parse(source)
+        assert meta.find_undeclared_variables(ast) == expect
+
+    @pytest.mark.parametrize(
+        ("source", "expect"),
+        [
+            # before the if statement
+            (
+                "{{ x }}{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}",
+                {"a", "x"},
+            ),
+            # in the test
+            (
+                "{% if x %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}",
+                {"x"},
+            ),
+            # in the test of an elif
+            (
+                "{% if a %}{% set x = 1 %}{% elif x %}{% set x = 2 %}{% else %}"
+                "{% set x = 3 %}{% endif %}",
+                {"a", "x"},
+            ),
+            # in a branch, before the set
+            (
+                "{% if a %}{{ x }}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}",
+                {"a", "x"},
+            ),
+            # in the value that is set
+            (
+                "{% if a %}{% set x = x + 1 %}{% else %}{% set x = 2 %}{% endif %}",
+                {"a", "x"},
+            ),
+            # in a for loop that runs before the if statement
+            (
+                "{% for i in seq %}{{ x }}{% endfor %}"
+                "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}",
+                {"seq", "a", "x"},
+            ),
+            # in a macro that may be called before the if statement
+            (
+                "{% macro m() %}{{ x }}{% endmacro %}{{ m() }}"
+                "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}",
+                {"a", "x"},
+            ),
+        ],
+    )
+    def test_find_undeclared_variables_loaded_before_set(self, env, source, expect):
+        ast = env.parse(source)
+        assert meta.find_undeclared_variables(ast) == expect
+
+    def test_find_undeclared_variables_set_before_if(self, env):
+        ast = env.parse("{% set x = 0 %}{% if a %}{% set x = 1 %}{% endif %}{{ x }}")
+        assert meta.find_undeclared_variables(ast) == {"a"}
+
     def test_find_refererenced_templates(self, env):
         ast = env.parse('{% extends "layout.html" %}{% include helper %}')
         i = meta.find_referenced_templates(ast)

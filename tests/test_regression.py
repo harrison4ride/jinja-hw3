@@ -7,6 +7,7 @@ from jinja2 import Template
 from jinja2 import TemplateAssertionError
 from jinja2 import TemplateNotFound
 from jinja2 import TemplateSyntaxError
+from jinja2.utils import Namespace
 from jinja2.utils import pass_context
 
 
@@ -758,6 +759,81 @@ def test_load_parameter_when_set_in_all_if_branches(env):
         "{{ a }}"
     )
     assert tmpl.render(a={"b": 0}) == "01"
+
+
+def test_load_parameter_when_elif_does_not_set(env):
+    tmpl = env.from_string(
+        "{% if a %}{% set x = 1 %}{% elif b %}{% set x = 2 %}"
+        "{% elif c %}{% else %}{% set x = 4 %}{% endif %}"
+        "{{ x }}"
+    )
+    assert tmpl.render(c=True, x="ctx") == "ctx"
+    assert tmpl.render(b=True, x="ctx") == "2"
+    assert tmpl.render(x="ctx") == "4"
+
+
+@pytest.mark.parametrize(
+    ("nested", "expect"),
+    [
+        ("{% for i in [0] %}{{ x }}{% endfor %}", "ctx"),
+        ("{% macro m() %}{{ x }}{% endmacro %}{{ m() }}", "ctx"),
+        (
+            "{% macro m() %}{{ caller() }}{% endmacro %}"
+            "{% call m() %}{{ x }}{% endcall %}",
+            "ctx",
+        ),
+        ("{% filter upper %}{{ x }}{% endfilter %}", "CTX"),
+        ("{% with %}{{ x }}{% endwith %}", "ctx"),
+        ("{% set y %}{{ x }}{% endset %}{{ y }}", "ctx"),
+        ("{% autoescape false %}{{ x }}{% endautoescape %}", "ctx"),
+    ],
+)
+def test_load_parameter_for_nested_frame_when_set_in_all_if_branches(
+    env, nested, expect
+):
+    """A nested frame that runs before a name is set in all branches of
+    an if block sees the value that was passed to the template.
+    """
+    set_x = "{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}{{ x }}"
+    tmpl = env.from_string(f"{nested}{{% if a %}}{set_x}")
+    assert tmpl.render(a=True, x="ctx") == f"{expect}1"
+    tmpl = env.from_string(f"{{% if a %}}{nested}{set_x}")
+    assert tmpl.render(a=True, x="ctx") == f"{expect}1"
+    assert tmpl.render(a=False, x="ctx") == "2"
+
+
+def test_load_namespace_for_nested_frame_when_set_in_all_if_branches(env):
+    tmpl = env.from_string(
+        "{% for i in [0] %}{% set ns.a = 1 %}{% endfor %}"
+        "{% if a %}{% set ns = 2 %}{% else %}{% set ns = 3 %}{% endif %}{{ ns }}"
+    )
+    ns = Namespace()
+    assert tmpl.render(a=True, ns=ns) == "2"
+    assert ns.a == 1
+
+
+@pytest.mark.parametrize(
+    "keep",
+    [
+        "{% macro m() %}{{ x }}{% endmacro %}{% set ns.m = m %}",
+        "{% macro k() %}{% set ns.m = caller %}{% endmacro %}"
+        "{% call k() %}{{ x }}{% endcall %}",
+    ],
+)
+def test_load_parameter_for_macro_kept_from_previous_loop_iteration(env, keep):
+    """A macro kept from an earlier iteration and called before the name
+    is set in all branches of an if block sees the value that was passed
+    to the template, like a direct use at that point.
+    """
+    tmpl = env.from_string(
+        "{% set ns = namespace(m=none) %}"
+        "{% for i in [1, 2] %}"
+        "{% if ns.m %}({{ ns.m() }}){% endif %}"
+        "{% if a %}{% set x = i %}{% else %}{% set x = 0 %}{% endif %}"
+        f"{keep}"
+        "{% endfor %}"
+    )
+    assert tmpl.render(a=True, x="ctx") == "(ctx)"
 
 
 @pytest.mark.parametrize("unicode_char", ["\N{FORM FEED}", "\x85"])
