@@ -179,6 +179,32 @@ class TestMeta:
         x = meta.find_undeclared_variables(ast)
         assert x == {"foo"}
 
+    def test_find_undeclared_variables_set_in_all_branches(self, env):
+        # The template from https://github.com/pallets/jinja/issues/2069.
+        # Every branch sets "output" before it is read.
+        ast = env.parse(
+            "{% if control == 'something' %}\n"
+            "    {% set output = 1 %}\n"
+            "{% elif control == 'something else' %}\n"
+            "    {% set output = 2 %}\n"
+            "{% else %}\n"
+            "    {% set output = 3 %}\n"
+            "{% endif %}\n"
+            "{{ output }}\n"
+        )
+        x = meta.find_undeclared_variables(ast)
+        assert x == {"control"}
+
+    def test_find_undeclared_variables_set_in_if_and_else(self, env):
+        # The same wrong result without an elif branch. Unlike the template
+        # above, this one was also reported wrongly before 3.1.5.
+        ast = env.parse(
+            "{% if bar %}{% set foo = 1 %}{% else %}{% set foo = 2 %}{% endif %}"
+            "{{ foo }}"
+        )
+        x = meta.find_undeclared_variables(ast)
+        assert x == {"bar"}
+
     def test_find_refererenced_templates(self, env):
         ast = env.parse('{% extends "layout.html" %}{% include helper %}')
         i = meta.find_referenced_templates(ast)
