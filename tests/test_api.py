@@ -264,6 +264,17 @@ class TestMeta:
                 "{% for i in seq %}{{ x }}{% endfor %}",
                 {"a", "seq"},
             ),
+            # the loop and with targets before the if are other variables
+            (
+                "{% for x in seq %}{{ x }}{% endfor %}"
+                "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}{{ x }}",
+                {"seq", "a"},
+            ),
+            (
+                "{% with x = 1 %}{{ x }}{% endwith %}"
+                "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}{{ x }}",
+                {"a"},
+            ),
         ],
     )
     def test_find_undeclared_variables_set_in_every_branch(self, env, source, expect):
@@ -307,6 +318,12 @@ class TestMeta:
             (
                 "{% if a %}{% if b %}{% set x = 1 %}{% endif %}{% else %}"
                 "{% set x = 3 %}{% endif %}{{ x }}",
+                {"a", "b", "x"},
+            ),
+            # set in all branches of a nested if, but not when a is false
+            (
+                "{% if a %}{% if b %}{% set x = 1 %}{% else %}{% set x = 2 %}"
+                "{% endif %}{% endif %}{{ x }}",
                 {"a", "b", "x"},
             ),
         ],
@@ -355,6 +372,12 @@ class TestMeta:
                 "{% macro m() %}{{ x }}{% endmacro %}{{ m() }}"
                 "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}",
                 {"a", "x"},
+            ),
+            # in the else block of a for loop, which does not see the target
+            (
+                "{% for x in seq %}{% else %}{{ x }}{% endfor %}"
+                "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}",
+                {"seq", "a", "x"},
             ),
         ],
     )

@@ -813,27 +813,61 @@ def test_load_namespace_for_nested_frame_when_set_in_all_if_branches(env):
 
 
 @pytest.mark.parametrize(
-    "keep",
+    ("source", "expect"),
     [
-        "{% macro m() %}{{ x }}{% endmacro %}{% set ns.m = m %}",
-        "{% macro k() %}{% set ns.m = caller %}{% endmacro %}"
-        "{% call k() %}{{ x }}{% endcall %}",
+        # kept in an earlier loop iteration
+        ("{% for i in [1, 2] %}{call}{set_x}{keep}{% endfor %}", "(ctx)"),
+        (
+            "{% for i in [1, 2] %}{call}{set_x}"
+            "{% call k() %}{{ x }}{% endcall %}{% endfor %}",
+            "(ctx)",
+        ),
+        # kept in a frame that a loop enters again
+        (
+            "{% for i in [1, 2] %}{% with %}{call}{set_x}{keep}"
+            "{% endwith %}{% endfor %}",
+            "(ctx)",
+        ),
+        (
+            "{% for i in [1, 2] %}{% filter upper %}{call}{set_x}{keep}"
+            "{% endfilter %}{% endfor %}",
+            "(CTX)",
+        ),
+        (
+            "{% for i in [1, 2] %}{% set y %}{call}{set_x}{keep}{% endset %}"
+            "{{ y }}{% endfor %}",
+            "(ctx)",
+        ),
+        (
+            "{% for i in [1, 2] %}{% for j in [] %}{% else %}{call}{set_x}{keep}"
+            "{% endfor %}{% endfor %}",
+            "(ctx)",
+        ),
+        # kept in a sibling frame
+        (
+            "{% with %}{% set x = 1 %}{keep}{% endwith %}"
+            "{% with %}{call}{set_x}{% endwith %}",
+            "(ctx)",
+        ),
     ],
 )
-def test_load_parameter_for_macro_kept_from_previous_loop_iteration(env, keep):
-    """A macro kept from an earlier iteration and called before the name
-    is set in all branches of an if block sees the value that was passed
-    to the template, like a direct use at that point.
+def test_load_parameter_for_kept_macro_when_set_in_all_if_branches(env, source, expect):
+    """A macro or caller that is kept and called before a name is set in
+    all branches of an if block sees the value that was passed to the
+    template, like a direct use at that point.
     """
-    tmpl = env.from_string(
-        "{% set ns = namespace(m=none) %}"
-        "{% for i in [1, 2] %}"
-        "{% if ns.m %}({{ ns.m() }}){% endif %}"
-        "{% if a %}{% set x = i %}{% else %}{% set x = 0 %}{% endif %}"
-        f"{keep}"
-        "{% endfor %}"
+    source = (
+        source.replace("{call}", "{% if ns.f %}({{ ns.f() }}){% endif %}")
+        .replace(
+            "{set_x}", "{% if a %}{% set x = 5 %}{% else %}{% set x = 0 %}{% endif %}"
+        )
+        .replace("{keep}", "{% macro m() %}{{ x }}{% endmacro %}{% set ns.f = m %}")
     )
-    assert tmpl.render(a=True, x="ctx") == "(ctx)"
+    tmpl = env.from_string(
+        "{% set ns = namespace(f=none) %}"
+        "{% macro k() %}{% set ns.f = caller %}{% endmacro %}" + source
+    )
+    assert tmpl.render(a=True, x="ctx") == expect
 
 
 @pytest.mark.parametrize("unicode_char", ["\N{FORM FEED}", "\x85"])

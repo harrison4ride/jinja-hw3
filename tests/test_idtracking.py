@@ -276,10 +276,11 @@ def test_if_branching_stores_all_branches():
     sym = symbols_for_node(tmpl)
     assert sym.stores == {"variable"}
     assert sym.loads == {
-        "l_0_variable": ("undefined", None),
+        "l_0_variable": ("resolve", "variable"),
         "l_0_a": ("resolve", "a"),
         "l_0_b": ("resolve", "b"),
     }
+    assert sym.unused_loads == {"l_0_variable"}
 
 
 def test_if_branching_stores_not_in_elif():
@@ -308,6 +309,7 @@ def test_if_branching_stores_not_in_elif():
         "l_0_b": ("resolve", "b"),
         "l_0_c": ("resolve", "c"),
     }
+    assert sym.unused_loads == set()
 
 
 def test_if_branching_stores_after_nested_load():
@@ -324,13 +326,37 @@ def test_if_branching_stores_after_nested_load():
     )
     if_ = nodes.If(nodes.Name("a", "load"), [assign(1)], [], [assign(2)])
 
-    # The loop runs first and has to see the value from the context.
+    # The loop runs first and uses the value from the context.
     sym = symbols_for_node(nodes.Template([for_loop, if_]))
-    assert sym.loads["l_0_variable"] == ("resolve", "variable")
+    assert sym.unused_loads == set()
 
     # The loop runs after the name is set in all branches.
     sym = symbols_for_node(nodes.Template([if_, for_loop]))
-    assert sym.loads["l_0_variable"] == ("undefined", None)
+    assert sym.unused_loads == {"l_0_variable"}
+
+
+def test_if_branching_stores_with_closure():
+    def assign(value):
+        return nodes.Assign(nodes.Name("variable", "store"), nodes.Const(value))
+
+    def macro(*params):
+        return nodes.Macro(
+            "m",
+            [nodes.Name(param, "param") for param in params],
+            [],
+            [nodes.Output([nodes.Name("variable", "load")])],
+        )
+
+    if_ = nodes.If(nodes.Name("a", "load"), [assign(1)], [], [assign(2)])
+
+    # The macro can be kept and called before a later if block sets the
+    # name, even though it is defined after this one.
+    sym = symbols_for_node(nodes.Template([if_, macro()]))
+    assert sym.unused_loads == set()
+
+    # The macro loads its own parameter.
+    sym = symbols_for_node(nodes.Template([if_, macro("variable")]))
+    assert sym.unused_loads == {"l_0_variable"}
 
 
 def test_if_branching_multi_scope():
