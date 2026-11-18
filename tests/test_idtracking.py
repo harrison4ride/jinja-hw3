@@ -359,6 +359,21 @@ def test_if_branching_stores_with_closure():
     assert sym.unused_loads == {"l_0_variable"}
 
 
+def test_if_branching_stores_in_overlay_scope():
+    def assign(value):
+        return nodes.Assign(nodes.Name("variable", "store"), nodes.Const(value))
+
+    if_ = nodes.If(nodes.Name("a", "load"), [assign(1)], [], [assign(2)])
+
+    # An overlay scope is analysed without the frame around it, so the
+    # macros that can be called in it are not known.
+    sym = symbols_for_node(nodes.OverlayScope(nodes.Dict([]), [if_]))
+    assert sym.unused_loads == set()
+
+    sym = symbols_for_node(nodes.Template([if_]))
+    assert sym.unused_loads == {"l_0_variable"}
+
+
 def test_if_branching_multi_scope():
     for_loop = nodes.For(
         nodes.Name("item", "store"),

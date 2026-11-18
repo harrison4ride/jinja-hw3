@@ -11,14 +11,17 @@ from jinja2 import Environment
 from jinja2 import is_undefined
 from jinja2 import make_logging_undefined
 from jinja2 import meta
+from jinja2 import nodes
 from jinja2 import StrictUndefined
 from jinja2 import Template
 from jinja2 import TemplatesNotFound
 from jinja2 import Undefined
 from jinja2 import UndefinedError
 from jinja2.compiler import CodeGenerator
+from jinja2.ext import Extension
 from jinja2.runtime import Context
 from jinja2.utils import Cycler
+from jinja2.utils import Namespace
 from jinja2.utils import pass_context
 from jinja2.utils import pass_environment
 from jinja2.utils import pass_eval_context
@@ -431,6 +434,30 @@ class TestMeta:
             "{% include 'inc' %}"
         )
         assert meta.find_undeclared_variables(ast) == {"a"}
+
+    def test_find_undeclared_variables_overlay_scope(self):
+        class OverlayExtension(Extension):
+            tags = {"overlay"}
+
+            def parse(self, parser):
+                lineno = next(parser.stream).lineno
+                body = parser.parse_statements(("name:endoverlay",), drop_needle=True)
+                return nodes.OverlayScope(nodes.Dict([]), body, lineno=lineno)
+
+        env = Environment(extensions=[OverlayExtension])
+        source = (
+            "{% with %}{% set x = 1 %}{% macro m() %}{{ x }}{% endmacro %}"
+            "{% set ns.m = m %}{% endwith %}"
+            "{% overlay %}{{ ns.m() }}"
+            "{% if a %}{% set x = 2 %}{% else %}{% set x = 3 %}{% endif %}"
+            "{% endoverlay %}"
+        )
+        # The overlay scope and the with block use the same variable for
+        # "x", so the macro prints the value of "x" from the context.
+        tmpl = env.from_string(source)
+        assert tmpl.render(a=True, x="context", ns=Namespace()) == "context"
+        ast = env.parse(source)
+        assert meta.find_undeclared_variables(ast) == {"a", "ns", "x"}
 
     def test_find_refererenced_templates(self, env):
         ast = env.parse('{% extends "layout.html" %}{% include helper %}')
