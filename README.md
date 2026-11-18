@@ -166,7 +166,10 @@ a name set in only some branches and never read afterwards; a name that a nested
 even one the macro only uses locally; and every name of a frame in which an include or import with
 context runs before the `if`, or whose function has a macro that contains one, whatever the included
 template reads. Names that an included template reads from the context by itself are not reported,
-as before: `meta` does not look into included templates.
+as before: `meta` does not look into included templates. One constructed case makes `meta` miss a
+name that the render takes from the context: a macro kept by a sibling `{% with %}` block and called
+inside an `OverlayScope`, a node that only extensions create, before the `if`. The rendered output is
+unaffected.
 
 ## Validation Beyond the Test Suite
 
