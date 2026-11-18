@@ -150,6 +150,11 @@ class _Function:
         if self._closure_loads is None:
             if self.node is None:
                 self._closure_loads = set()
+            elif isinstance(self.node, nodes.OverlayScope):
+                # An overlay scope is compiled into the function around it,
+                # where a macro kept by a sibling frame, which uses the same
+                # variables, may be called and load any name.
+                self._closure_loads = {_ALL_NAMES}
             else:
                 self._closure_loads = _find_closure_loads(self.node)
 
@@ -182,7 +187,7 @@ class Symbols:
 
     def analyze_node(self, node: nodes.Node, **kwargs: t.Any) -> None:
         # Macros and call blocks, and frames without a parent, are
-        # compiled to functions of their own.
+        # compiled to functions of their own, except overlay scopes.
         if self.parent is None or isinstance(node, (nodes.Macro, nodes.CallBlock)):
             self.function = _Function(node)
 
