@@ -7,7 +7,8 @@ Unreleased
 
 -   ``meta.find_undeclared_variables`` does not report a variable that is set
     in all branches of ``{% if %}{% elif %}{% else %}`` blocks before it is
-    used. :issue:`2069`
+    used, unless code that may run earlier, such as a loop, a macro or an
+    included template, could read its value from the context. :issue:`2069`
 
 
 Version 3.1.6

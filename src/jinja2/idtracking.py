@@ -31,21 +31,52 @@ def symbols_for_node(
     return sym
 
 
-def _find_loads(node: nodes.Node) -> t.Iterator[str]:
-    """Yield the names that the node or a node below it loads."""
-    for child in itertools.chain([node], node.find_all((nodes.Name, nodes.NSRef))):
+# Stands for every name, it is not a valid identifier.
+_ALL_NAMES = "*"
+
+
+def _walk(node: nodes.Node) -> t.Iterator[nodes.Node]:
+    """Yield the node and the nodes below it, except the bodies of
+    unscoped blocks: a block is a function of its own that gets the
+    template context, not the variables of the frame around it.
+    """
+    yield node
+
+    for child in node.iter_child_nodes():
+        if not (isinstance(child, nodes.Block) and not child.scoped):
+            yield from _walk(child)
+
+
+def _scan(node: nodes.Node) -> t.Set[str]:
+    """Return the names that the node or a node below it loads, or
+    ``{_ALL_NAMES}`` if it gives the variables of the frame to code that
+    is not analysed here: an include or import with context, or a
+    derived context reference.
+    """
+    rv: t.Set[str] = set()
+
+    for child in _walk(node):
         if isinstance(child, nodes.NSRef) or (
             isinstance(child, nodes.Name) and child.ctx == "load"
         ):
-            yield child.name
+            rv.add(child.name)
+        elif isinstance(child, (nodes.Include, nodes.Import, nodes.FromImport)):
+            if child.with_context:
+                return {_ALL_NAMES}
+        elif isinstance(child, nodes.DerivedContextReference):
+            return {_ALL_NAMES}
+
+    return rv
 
 
 def _find_frame_loads(node: nodes.Node) -> t.Set[str]:
-    """Return the names that a nested frame may load from the frame it
-    runs in. Loop and with targets are names of the nested frame.
+    """Return the names that a nested frame, or an include or import
+    with context, may load from the frame it runs in. Loop and with
+    targets are names of the nested frame.
     """
+    own: t.Set[str] = set()
+    outer: t.Sequence[nodes.Node] = ()
     inner: t.Sequence[nodes.Node]
-    outer: t.Sequence[nodes.Node]
 
     if isinstance(node, nodes.For):
         own = set(_find_targets(node.target))
@@ -56,11 +87,17 @@ def _find_frame_loads(node: nodes.Node) -> t.Set[str]:
         inner = node.body
         outer = node.values
     else:
-        return set(_find_loads(node))
+        inner = [node]
 
-    rv = {name for child in inner for name in _find_loads(child) if name not in own}
-    rv.update(name for child in outer for name in _find_loads(child))
-    return rv
+    rv: t.Set[str] = set()
+
+    for child in inner:
+        rv.update(_scan(child) - own)
+
+    for child in outer:
+        rv.update(_scan(child))
+
+    return {_ALL_NAMES} if _ALL_NAMES in rv else rv
 
 
 def _find_targets(node: nodes.Node) -> t.Iterator[str]:
@@ -77,17 +114,19 @@ def _find_closure_loads(node: nodes.Node) -> t.Set[str]:
     """
     rv: t.Set[str] = set()
 
-    for closure in node.find_all((nodes.Macro, nodes.CallBlock)):
-        assert isinstance(closure, (nodes.Macro, nodes.CallBlock))
+    for closure in _walk(node):
+        if closure is node or not isinstance(closure, (nodes.Macro, nodes.CallBlock)):
+            continue
+
         params = {arg.name for arg in closure.args}
 
         for child in closure.body:
-            rv.update(name for name in _find_loads(child) if name not in params)
+            rv.update(_scan(child) - params)
 
         for child in closure.defaults:
-            rv.update(_find_loads(child))
+            rv.update(_scan(child))
 
-    return rv
+    return {_ALL_NAMES} if _ALL_NAMES in rv else rv
 
 
 class _Function:
@@ -223,8 +262,9 @@ class Symbols:
             self._define_ref(name, load=(VAR_LOAD_RESOLVE, name))
 
     def nested_frame(self, node: nodes.Node) -> None:
-        """Remember a frame that runs inside this frame at this point. It
-        can see the names of this frame that are not stored yet.
+        """Remember a nested frame, or an include or import that gets the
+        variables of this frame, that runs at this point. It can see the
+        names of this frame that are not stored yet.
         """
         self.nested_frames.append((node, frozenset(self.stores)))
 
@@ -232,14 +272,20 @@ class Symbols:
         """Check if a macro or call block, or a nested frame that runs
         before a branch stores the name, may load it.
         """
-        if name in self.function.closure_loads():
+        closure_loads = self.function.closure_loads()
+
+        if name in closure_loads or _ALL_NAMES in closure_loads:
             return True
 
-        return any(
-            name not in stored and name in self.function.loads(node)
-            for branch in branch_symbols
-            for node, stored in branch.nested_frames
-        )
+        for branch in branch_symbols:
+            for node, stored in branch.nested_frames:
+                if name not in stored:
+                    loads = self.function.loads(node)
+
+                    if name in loads or _ALL_NAMES in loads:
+                        return True
+
+        return False
 
     def branch_update(self, branch_symbols: t.Sequence["Symbols"]) -> None:
         stores: t.Set[str] = set()
@@ -406,12 +452,25 @@ class FrameSymbolVisitor(NodeVisitor):
     def visit_Macro(self, node: nodes.Macro, **kwargs: t.Any) -> None:
         self.symbols.store(node.name)
 
+    def visit_Include(self, node: nodes.Include, **kwargs: t.Any) -> None:
+        self.generic_visit(node, **kwargs)
+
+        if node.with_context:
+            self.symbols.nested_frame(node)
+
     def visit_Import(self, node: nodes.Import, **kwargs: t.Any) -> None:
         self.generic_visit(node, **kwargs)
+
+        if node.with_context:
+            self.symbols.nested_frame(node)
+
         self.symbols.store(node.target)
 
     def visit_FromImport(self, node: nodes.FromImport, **kwargs: t.Any) -> None:
         self.generic_visit(node, **kwargs)
+
+        if node.with_context:
+            self.symbols.nested_frame(node)
 
         for name in node.names:
             if isinstance(name, tuple):
@@ -455,6 +514,14 @@ class FrameSymbolVisitor(NodeVisitor):
 
     def visit_Block(self, node: nodes.Block, **kwargs: t.Any) -> None:
         """Stop visiting at blocks."""
+        if node.scoped:
+            self.symbols.nested_frame(node)
 
     def visit_OverlayScope(self, node: nodes.OverlayScope, **kwargs: t.Any) -> None:
         """Do not visit into overlay scopes."""
+        self.symbols.nested_frame(node)
+
+    def visit_DerivedContextReference(
+        self, node: nodes.DerivedContextReference, **kwargs: t.Any
+    ) -> None:
+        self.symbols.nested_frame(node)
