@@ -19,12 +19,15 @@ these commits:
 | `hw3-tests` | `2b5f583` | tests revised after three code reviews (2 removed, 12 added) | 17 failed, 942 passed |
 | | `abaf1e0` | first version of the fix: `src/jinja2/idtracking.py`, `src/jinja2/meta.py`, `CHANGES.rst` | 959 passed |
 | | `1e84598` | 11 tests for names that an include, import or block receives before the `if` | 6 failed, 964 passed |
-| `hw3-fix` | `8107a1d` | the fix, completed: `src/jinja2/idtracking.py` and the changelog entry | 970 passed |
-| | later commits | validation tools in [`hw3/`](hw3/) and this README | 970 passed |
+| | `8107a1d` | second version of the fix: `src/jinja2/idtracking.py` and the changelog entry | 970 passed |
+| | `746888a` to `144992e` | validation tools in [`hw3/`](hw3/) and this README | 970 passed |
+| | `4c3aa3f` | 2 tests for a macro that reads a variable of an overlay scope | 2 failed, 970 passed |
+| `hw3-fix` | `00f0603` | the fix, completed: `src/jinja2/idtracking.py` | 972 passed |
+| | later commits | this README | 972 passed |
 
 `src/` stays identical to 3.1.6 up to `hw3-tests`, so those test commits run against the original
-code. `1e84598` runs its new tests against the first version of the fix, which misses six of them.
-To read the changes:
+code. `1e84598` runs its 11 new tests against the first version of the fix, which fails six of
+them, and `4c3aa3f` runs its 2 against the second version, which fails both. To read the changes:
 
 ```sh
 git diff 3.1.6 hw3-fix -- src/ CHANGES.rst    # the fix
@@ -82,10 +85,10 @@ git checkout hw3-tests
 ```
 
 Thirteen of the failures are wrong results of `find_undeclared_variables`; the four in
-`tests/test_idtracking.py` fail because 3.1.6 has no `Symbols.unused_loads`. To run all 61 new tests
+`tests/test_idtracking.py` fail because 3.1.6 has no `Symbols.unused_loads`. To run all 63 new tests
 against 3.1.6, use the reference worktree that [`hw3/README.md`](hw3/README.md#reference-build)
 describes, from `main`: `PYTHONPATH=../jinja-3.1.6/src .venv/bin/python -m pytest -q` gives
-`22 failed, 948 passed`.
+`23 failed, 949 passed`.
 
 The example from the issue gives the same result outside the tests:
 
@@ -108,9 +111,9 @@ On `3.1.6`, `hw3-repro` and `hw3-tests` it prints `['control', 'output']`; on `m
 
 ```sh
 git checkout main
-.venv/bin/python -m pytest tests/test_api.py::TestMeta -v    # 44 passed
-.venv/bin/python -m pytest -q                                # 970 passed
-.venv/bin/python -m pytest tests/test_api.py::TestMeta tests/test_idtracking.py tests/test_regression.py -q    # 123 passed
+.venv/bin/python -m pytest tests/test_api.py::TestMeta -v    # 45 passed
+.venv/bin/python -m pytest -q                                # 972 passed
+.venv/bin/python -m pytest tests/test_api.py::TestMeta tests/test_idtracking.py tests/test_regression.py -q    # 125 passed
 ```
 
 The two reproduction tests that failed on `hw3-repro` now pass; the output includes lines like:
@@ -120,12 +123,12 @@ tests/test_api.py::TestMeta::test_find_undeclared_variables_set_in_all_branches 
 tests/test_api.py::TestMeta::test_find_undeclared_variables_set_in_if_and_else PASSED
 ```
 
-The 61 new tests:
+The 63 new tests:
 
 | File | New tests | What they check |
 |---|---|---|
-| `tests/test_api.py::TestMeta` | 41 | `find_undeclared_variables` with names set in every branch (the issue's template, `if`/`else`, more `elif`s, nested `if`s, tuple and block assignments, macros, loops), in some branches only, read before the set (in a test, in the value, in a loop or macro that runs first), and passed to an include, import or scoped block before or after the `if` |
-| `tests/test_idtracking.py` | 4 | the symbol analysis: one table per `elif`, `Symbols.unused_loads`, nested frames and macros that load the name |
+| `tests/test_api.py::TestMeta` | 42 | `find_undeclared_variables` with names set in every branch (the issue's template, `if`/`else`, more `elif`s, nested `if`s, tuple and block assignments, macros, loops), in some branches only, read before the set (in a test, in the value, in a loop or macro that runs first), passed to an include, import or scoped block before or after the `if`, and read by a macro called in an overlay scope |
+| `tests/test_idtracking.py` | 5 | the symbol analysis: one table per `elif`, `Symbols.unused_loads`, nested frames and macros that load the name, and overlay scopes |
 | `tests/test_regression.py` | 16 | rendering stays as in 3.1.6: an `elif` that does not set the name, nested frames that read it first, and macros kept from an earlier loop iteration or a sibling frame |
 
 The repository's own type and style checks also pass:
@@ -157,25 +160,35 @@ block, a scoped block or an overlay scope); a macro or call block of the same fu
 (macros inside unscoped blocks are skipped, since blocks cannot see the frame's variables); and an
 include or import with context, or a derived context reference, before the store, which hands all of
 the frame's variables to code that is not analysed here. A nested frame or macro that contains such
-an include counts as loading every name. `meta` skips the recorded loads. For 25,244 template and mode pairs, the generated Python is identical to
-3.1.6; see [`hw3/README.md`](hw3/README.md).
+an include counts as loading every name. An overlay scope, a node that only extensions create, is
+analysed without the frame around it, so the analysis cannot see the macros that may run in it and
+counts every name as loaded by one. `meta` skips the recorded loads. For 25,244 template and mode
+pairs, the generated Python is identical to 3.1.6; see [`hw3/README.md`](hw3/README.md).
 
 Known limitations. Some names are still reported although no path uses their lookup, as in 3.1.6:
 a name set in only some branches and never read afterwards; a name that a nested frame before the
 `if` reads, even one that sets it first; a name that any macro or call block of the function reads,
-even one the macro only uses locally; and every name of a frame in which an include or import with
+even one the macro only uses locally; every name of a frame in which an include or import with
 context runs before the `if`, or whose function has a macro that contains one, whatever the included
-template reads. Names that an included template reads from the context by itself are not reported,
-as before: `meta` does not look into included templates. One constructed case makes `meta` miss a
-name that the render takes from the context: a macro kept by a sibling `{% with %}` block and called
-inside an `OverlayScope`, a node that only extensions create, before the `if`. The rendered output is
-unaffected.
+template reads; and every name set in all branches inside an overlay scope. Names that an included
+template reads from the context by itself are not reported, as before: `meta` does not look into
+included templates.
 
 ## Validation Beyond the Test Suite
 
 [`hw3/`](hw3/) holds the scripts used to validate the fix: probes, traces, include and kept-macro
 cases, a differential test over 12,000 distinct random templates with a rendering oracle, and the
 generated-code comparison. Its [README](hw3/README.md) lists the commands and expected results.
+
+## GitHub Actions
+
+The workflows in `.github/workflows/` are Jinja's own, and they fail in this repository for reasons
+unrelated to the fix. `Publish` runs on every tag push and fails at the upload to PyPI, which has no
+trusted publisher for this repository, so nothing reaches PyPI. `Tests` fails in the same jobs on
+the unmodified 3.1.6 commit. Two causes show in the job annotations and in a local run: the Ubuntu
+26.04 runner has no Python 3.7, 3.8 or 3.9, and tox 4.67, which `pip install tox` now installs,
+rejects environment names such as `py3.11` ("did you mean py311?"). The commands in this README run
+pytest directly.
 
 ---
 
