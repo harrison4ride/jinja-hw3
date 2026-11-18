@@ -389,6 +389,49 @@ class TestMeta:
         ast = env.parse("{% set x = 0 %}{% if a %}{% set x = 1 %}{% endif %}{{ x }}")
         assert meta.find_undeclared_variables(ast) == {"a"}
 
+    @pytest.mark.parametrize(
+        ("source", "expect"),
+        [
+            # an include before the if statement
+            ("{% include 'inc' %}", {"a", "x"}),
+            # an include in a loop that runs before the if statement
+            ("{% for i in seq %}{% include 'inc' %}{% endfor %}", {"a", "seq", "x"}),
+            # an import with context before the if statement
+            ("{% import 'mod' as m with context %}", {"a", "x"}),
+            ("{% from 'mod' import v with context %}", {"a", "x"}),
+            # a scoped block before the if statement
+            ("{% block b scoped %}{% include 'inc' %}{% endblock %}", {"a", "x"}),
+            # an include in a macro
+            ("{% macro m() %}{% include 'inc' %}{% endmacro %}", {"a", "x"}),
+            # an include without context does not see the variables
+            ("{% include 'inc' without context %}", {"a"}),
+            # a scoped block sees them, but only reads "y"
+            ("{% block b scoped %}{{ y }}{% endblock %}", {"a", "y"}),
+            # an unscoped block gets the template context, so the include in
+            # it reads "x" itself, like any include outside the if statement
+            ("{% block b %}{% include 'inc' %}{% endblock %}", {"a"}),
+            (
+                "{% block b %}{% macro m() %}{% include 'inc' %}{% endmacro %}"
+                "{% endblock %}",
+                {"a"},
+            ),
+        ],
+    )
+    def test_find_undeclared_variables_passed_to_template(self, env, source, expect):
+        # The included or imported template gets the variables of the
+        # frame, so it sees "x" from the context before the if sets it.
+        ast = env.parse(
+            source + "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}"
+        )
+        assert meta.find_undeclared_variables(ast) == expect
+
+    def test_find_undeclared_variables_include_after_set(self, env):
+        ast = env.parse(
+            "{% if a %}{% set x = 1 %}{% else %}{% set x = 2 %}{% endif %}"
+            "{% include 'inc' %}"
+        )
+        assert meta.find_undeclared_variables(ast) == {"a"}
+
     def test_find_refererenced_templates(self, env):
         ast = env.parse('{% extends "layout.html" %}{% include helper %}')
         i = meta.find_referenced_templates(ast)
